@@ -1,0 +1,11 @@
+[package]
+name = "chatmail-turn"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = "3"
+env_logger = "0.11.8"
+tokio = "1.47.1"
+turn = "0.11.0"
+webrtc-util = "0.12.0"
