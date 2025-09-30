@@ -1,17 +1,26 @@
+use std::collections::BTreeSet;
 use std::net::IpAddr;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use clap::{App, AppSettings, Arg};
 use tokio::net::UdpSocket;
 use tokio::signal;
 use tokio::time::Duration;
+use turn::Error;
 use turn::auth::*;
 use turn::relay::relay_static::RelayAddressGeneratorStatic;
-use turn::server::config::{ServerConfig, ConnConfig};
 use turn::server::Server;
-use turn::Error;
+use turn::server::config::{ConnConfig, ServerConfig};
 use webrtc_util::vnet::net::Net;
+
+fn public_ips() -> BTreeSet<IpAddr> {
+    let mut ip_set = BTreeSet::new();
+    let interfaces = netdev::interface::get_interfaces();
+    for interface in interfaces {
+        ip_set.extend(interface.global_ip_addrs());
+    }
+    ip_set
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -27,25 +36,11 @@ async fn main() -> Result<(), Error> {
                 .long("fullhelp"),
         )
         .arg(
-            Arg::with_name("public-ip")
-                .required_unless("FULLHELP")
-                .takes_value(true)
-                .long("public-ip")
-                .help("IP Address that TURN can be contacted by."),
-        )
-        .arg(
             Arg::with_name("realm")
                 .default_value("webrtc.rs")
                 .takes_value(true)
                 .long("realm")
                 .help("Realm (defaults to \"webrtc.rs\")"),
-        )
-        .arg(
-            Arg::with_name("port")
-                .takes_value(true)
-                .default_value("3478")
-                .long("port")
-                .help("Listening port."),
         );
 
     let matches = app.clone().get_matches();
@@ -55,23 +50,28 @@ async fn main() -> Result<(), Error> {
         std::process::exit(0);
     }
 
-    let public_ip = matches.value_of("public-ip").unwrap();
-    let port = matches.value_of("port").unwrap();
+    let port = 3478;
     let realm = matches.value_of("realm").unwrap();
 
-    let conn = Arc::new(UdpSocket::bind(format!("0.0.0.0:{port}")).await?);
+    let mut conn_configs = Vec::new();
+    for public_ip in public_ips() {
+        println!("Listening on public IP: {public_ip}");
+        let conn = Arc::new(UdpSocket::bind((public_ip, port)).await?);
+        let conn_config = ConnConfig {
+            conn,
+            relay_addr_generator: Box::new(RelayAddressGeneratorStatic {
+                relay_address: public_ip,
+                address: public_ip.to_string(),
+                net: Arc::new(Net::new(None)),
+            }),
+        };
+        conn_configs.push(conn_config);
+    }
 
     let auth_handler = LongTermAuthHandler::new("north".to_string());
 
     let server = Server::new(ServerConfig {
-        conn_configs: vec![ConnConfig {
-            conn,
-            relay_addr_generator: Box::new(RelayAddressGeneratorStatic {
-                relay_address: IpAddr::from_str(public_ip)?,
-                address: "0.0.0.0".to_owned(),
-                net: Arc::new(Net::new(None)),
-            }),
-        }],
+        conn_configs,
         realm: realm.to_owned(),
         auth_handler: Arc::new(auth_handler),
         channel_bind_timeout: Duration::from_secs(0),
