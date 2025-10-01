@@ -1,0 +1,52 @@
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    name: Build binaries.
+    strategy:
+      matrix:
+        installable:
+          - chatmail-turn-aarch64-linux
+          - chatmail-turn-x86_64-linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: DeterminateSystems/nix-installer-action@main
+      - name: Build
+        run: nix build .#${{ matrix.installable }}
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.installable }}
+          path: result/bin/chatmail-turn
+          if-no-files-found: error
+
+  publish:
+    name: Upload binaries to the release
+    needs: ["build"]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download aarch64 binary
+        uses: actions/download-artifact@v5
+        with:
+          name: chatmail-turn-aarch64-linux
+          path: chatmail-turn-aarch64-linux.d
+      - name: Download x86_64 binary
+        uses: actions/download-artifact@v5
+        with:
+          name: chatmail-turn-x86_64-linux
+          path: chatmail-turn-x86_64-linux.d
+      - name: Upload binaries to the GitHub release
+        if: github.event_name == 'release'
+        env:
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          mkdir dist
+          mv chatmail-turn-aarch64-linux.d/chatmail-turn dist/chatmail-turn-aarch64-linux
+          mv chatmail-turn-x86_64-linux.d/chatmail-turn dist/chatmail-turn-x86_64-linux
+          gh release upload "$REF_NAME" \
+            --repo ${{ github.repository }} \
+            dist/*
