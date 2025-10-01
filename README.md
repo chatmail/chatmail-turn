@@ -17,3 +17,11 @@ turned out not to work with Firefox
 and Ubuntu Touch webview at the time.
 Debian 13 (Trixie) worked, but
 chatmail relays were based on Debian 12 at the time.
+
+## Building
+
+To build the release, run `nix build .#chatmail-turn-x86_64-linux`
+or `nix build .#chatmail-turn-aarch64-linux`,
+depending on the target platform.
+
+The resulting binary is then available in `./result/bin/chatmail-turn`.
