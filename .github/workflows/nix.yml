@@ -1,0 +1,34 @@
+name: Nix
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  format:
+    name: check flake formatting
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - uses: DeterminateSystems/nix-installer-action@main
+    - run: nix fmt flake.nix
+
+    # Check that formatting does not change anything.
+    - run: git diff --exit-code
+
+
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        installable:
+          - chatmail-turn-aarch64-linux
+          - chatmail-turn-x86_64-linux
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: DeterminateSystems/nix-installer-action@main
+    - name: Build
+      run: nix build .#${{ matrix.installable }}
