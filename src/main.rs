@@ -1,12 +1,15 @@
 use std::collections::BTreeSet;
 use std::net::IpAddr;
+use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
+use anyhow::{Context as _, Result};
 use clap::{App, AppSettings, Arg};
-use tokio::net::UdpSocket;
-use tokio::signal;
-use tokio::time::Duration;
+use tokio::io::AsyncWriteExt;
+use tokio::net::{UdpSocket, UnixListener};
 use turn::Error;
+use turn::auth::generate_long_term_credentials;
 use turn::auth::*;
 use turn::relay::relay_static::RelayAddressGeneratorStatic;
 use turn::server::Server;
@@ -20,6 +23,25 @@ fn public_ips() -> BTreeSet<IpAddr> {
         ip_set.extend(interface.global_ip_addrs());
     }
     ip_set
+}
+
+/// Listens on the Unix socket,
+/// returning valid credentials to any connecting client.
+async fn socket_loop(path: &Path, shared_secret: &str) -> Result<()> {
+    let listener = UnixListener::bind(path).context("Failed to bind Unix socket")?;
+    loop {
+        match listener.accept().await {
+            Ok((mut stream, _addr)) => {
+                let duration = Duration::from_secs(5 * 24 * 3600);
+                let (username, password) = generate_long_term_credentials(shared_secret, duration)?;
+                let res = format!("{username}:{password}");
+                stream.write_all(res.as_bytes()).await?;
+            }
+            Err(err) => {
+                eprintln!("Unix connection failed: {err}.");
+            }
+        }
+    }
 }
 
 #[tokio::main]
@@ -41,6 +63,13 @@ async fn main() -> Result<(), Error> {
                 .takes_value(true)
                 .long("realm")
                 .help("Realm (defaults to \"webrtc.rs\")"),
+        )
+        .arg(
+            Arg::with_name("socket")
+                .required(true)
+                .takes_value(true)
+                .long("socket")
+                .help("Unix socket path"),
         );
 
     let matches = app.clone().get_matches();
@@ -52,6 +81,7 @@ async fn main() -> Result<(), Error> {
 
     let port = 3478;
     let realm = matches.value_of("realm").unwrap();
+    let socket_path = Path::new(matches.value_of("socket").unwrap());
 
     let mut conn_configs = Vec::new();
     for public_ip in public_ips() {
@@ -68,7 +98,8 @@ async fn main() -> Result<(), Error> {
         conn_configs.push(conn_config);
     }
 
-    let auth_handler = LongTermAuthHandler::new("north".to_string());
+    let shared_secret = "north";
+    let auth_handler = LongTermAuthHandler::new(shared_secret.to_string());
 
     let server = Server::new(ServerConfig {
         conn_configs,
@@ -79,8 +110,10 @@ async fn main() -> Result<(), Error> {
     })
     .await?;
 
-    println!("Waiting for Ctrl-C...");
-    signal::ctrl_c().await.expect("failed to listen for event");
+    socket_loop(Path::new(socket_path), shared_secret)
+        .await
+        .unwrap();
+
     server.close().await?;
 
     Ok(())
