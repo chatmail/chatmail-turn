@@ -34,7 +34,13 @@ async fn socket_loop(path: &Path, shared_secret: &str) -> Result<()> {
             Ok((mut stream, _addr)) => {
                 let duration = Duration::from_secs(5 * 24 * 3600);
                 let (username, password) = generate_long_term_credentials(shared_secret, duration)?;
-                let res = format!("{username}:{password}");
+
+                // Write credentials to stdout.
+                // Newline indicates the end of the answer
+                // and allows the client to tell if the answer
+                // was truncated if the server is restarted 
+                // or crashed while writing the answer.
+                let res = format!("{username}:{password}\n");
                 stream.write_all(res.as_bytes()).await?;
             }
             Err(err) => {
