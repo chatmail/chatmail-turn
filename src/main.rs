@@ -59,19 +59,19 @@ async fn main() -> Result<(), Error> {
         .setting(AppSettings::DeriveDisplayOrder)
         .setting(AppSettings::SubcommandsNegateReqs)
         .arg(
-            Arg::with_name("FULLHELP")
+            Arg::new("FULLHELP")
                 .help("Prints more detailed help information")
                 .long("fullhelp"),
         )
         .arg(
-            Arg::with_name("realm")
+            Arg::new("realm")
                 .default_value("webrtc.rs")
                 .takes_value(true)
                 .long("realm")
                 .help("Realm (defaults to \"webrtc.rs\")"),
         )
         .arg(
-            Arg::with_name("socket")
+            Arg::new("socket")
                 .required(true)
                 .takes_value(true)
                 .long("socket")
