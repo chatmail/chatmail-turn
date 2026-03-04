@@ -1,17 +1,18 @@
 use std::collections::BTreeSet;
-use std::net::IpAddr;
-use std::path::Path;
+use std::net::{IpAddr, Ipv4Addr};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use clap::{App, AppSettings, Arg};
+use clap::{App, AppSettings, Arg, value_parser};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{UdpSocket, UnixListener};
 use turn::Error;
 use turn::auth::generate_long_term_credentials;
 use turn::auth::*;
 use turn::relay::relay_static::RelayAddressGeneratorStatic;
+use turn::relay::relay_range::RelayAddressGeneratorRanges;
 use turn::server::Server;
 use turn::server::config::{ConnConfig, ServerConfig};
 use webrtc_util::vnet::net::Net;
@@ -75,7 +76,48 @@ async fn main() -> Result<(), Error> {
                 .required(true)
                 .takes_value(true)
                 .long("socket")
+                .value_parser(value_parser!(PathBuf))
                 .help("Unix socket path"),
+        )
+        .arg(
+            Arg::with_name("listenport")
+                .default_value("3478")
+                .takes_value(true)
+                .long("listen-port")
+                .value_parser(value_parser!(u16))
+                .help("UDP listen port for incoming connections"),
+        )
+        .arg(
+            Arg::with_name("listenaddress")
+                .required(false)
+                .takes_value(true)
+                .long("listen-address")
+                .value_parser(value_parser!(Ipv4Addr))
+                .help("Local listen ipv4 address used together with --relay-address to run behind a nat"),
+        )
+        .arg(
+            Arg::with_name("relayaddress")
+                .required(false)
+                .takes_value(true)
+                .long("relay-address")
+                .value_parser(value_parser!(Ipv4Addr))
+                .help("External relay ipv4 address used together with --listen-address to run behind a nat"),
+        )
+        .arg(
+            Arg::with_name("minrelayport")
+                .default_value("49152")
+                .takes_value(true)
+                .long("min-relay-port")
+                .value_parser(value_parser!(u16))
+                .help("Minimum UDP port for relay connections (used only when --listen-address and --relay-address are specified)"),
+        )
+        .arg(
+            Arg::with_name("maxrelayport")
+                .default_value("65535")
+                .takes_value(true)
+                .long("max-relay-port")
+                .value_parser(value_parser!(u16))
+                .help("Maximum UDP port for relay connections (used only when --listen-address and --relay-address are specified)"),
         );
 
     let matches = app.clone().get_matches();
@@ -85,11 +127,31 @@ async fn main() -> Result<(), Error> {
         std::process::exit(0);
     }
 
-    let port = 3478;
+    let port = *matches.get_one::<u16>("listenport").unwrap();
     let realm = matches.value_of("realm").unwrap();
-    let socket_path = Path::new(matches.value_of("socket").unwrap());
+    let socket_path = Path::new(matches.get_one::<PathBuf>("socket").unwrap());
 
     let mut conn_configs = Vec::new();
+    if matches.is_present("relayaddress") & matches.is_present("listenaddress") {
+        let external_ip = IpAddr::V4(*matches.get_one::<Ipv4Addr>("relayaddress").expect("Invalid address"));
+        let local_ip = IpAddr::V4(*matches.get_one::<Ipv4Addr>("listenaddress").expect("Invalid address"));
+        let min_relay_port = *matches.get_one::<u16>("minrelayport").unwrap();
+        let max_relay_port = *matches.get_one::<u16>("maxrelayport").unwrap();
+        println!("Listening on local IP: {local_ip}");
+        let conn = Arc::new(UdpSocket::bind((local_ip, port)).await?);
+        let conn_config = ConnConfig {
+            conn,
+            relay_addr_generator: Box::new(RelayAddressGeneratorRanges {
+                relay_address: external_ip,
+                min_port: min_relay_port,
+                max_port: max_relay_port,
+                max_retries: 10,
+                address: local_ip.to_string(),
+                net: Arc::new(Net::new(None)),
+            }),
+        };
+        conn_configs.push(conn_config);
+    }
     for public_ip in public_ips() {
         println!("Listening on public IP: {public_ip}");
         let conn = Arc::new(UdpSocket::bind((public_ip, port)).await?);
