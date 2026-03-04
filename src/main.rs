@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
+use clap::builder::ValueParser;
 use clap::{App, AppSettings, Arg};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{UdpSocket, UnixListener};
@@ -15,6 +16,8 @@ use turn::relay::relay_static::RelayAddressGeneratorStatic;
 use turn::server::Server;
 use turn::server::config::{ConnConfig, ServerConfig};
 use webrtc_util::vnet::net::Net;
+
+mod cli;
 
 fn public_ips() -> BTreeSet<IpAddr> {
     let mut ip_set = BTreeSet::new();
@@ -76,6 +79,22 @@ async fn main() -> Result<(), Error> {
                 .takes_value(true)
                 .long("socket")
                 .help("Unix socket path"),
+        )
+        .arg(
+            Arg::new("listen")
+                .default_value(":3478")
+                .takes_value(true)
+                .value_parser(ValueParser::new(cli::parse_listen))
+                .long("listen")
+                .help("Address to bind TURN listener to: [ip]:<port>"),
+        )
+        .arg(
+            Arg::new("relayaddr")
+                .default_value(":49152-65535")
+                .takes_value(true)
+                .value_parser(ValueParser::new(cli::parse_range))
+                .long("relay-addr")
+                .help("Host and port range available for TURN relay: [ip]:<min>-<max>"),
         );
 
     let matches = app.clone().get_matches();
