@@ -35,9 +35,6 @@ fn listen_ips() -> BTreeSet<IpAddr> {
 /// 2. Binding to an IPv6 link-local address requires a Scope ID (interface index),
 ///    otherwise the OS returns EINVAL (Invalid Argument).
 fn is_link_local(ip: IpAddr) -> bool {
-    // Note: As of Rust 1.93, a unified IpAddr::is_link_local() method on the enum remains unstable
-    // see https://github.com/rust-lang/rust/issues/27709
-    // Ipv4Addr::is_link_local Ipv6Addr::is_unicast_link_local are stable.
     match ip {
         IpAddr::V4(ipv4) => ipv4.is_link_local(),
         IpAddr::V6(ipv6) => ipv6.is_unicast_link_local(),
