@@ -142,8 +142,7 @@ async fn main() -> Result<(), Error> {
     let conn_configs = if conn.is_some() && relay.ip.is_some() {
         // do not iterate over available IPs
         // when both hosts are explicitly specified
-        let stub_public_ip = IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED);
-        vec![create_conn_config(stub_public_ip, conn, &listen, &relay).await?]
+        vec![create_conn_config(listen.ip.unwrap(), conn, &listen, &relay).await?]
     } else {
         let mut conn_configs = Vec::new();
         for public_ip in public_ips() {
