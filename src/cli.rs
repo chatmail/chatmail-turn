@@ -1,5 +1,18 @@
 use std::net::{IpAddr, Ipv6Addr};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListenCfg {
+    pub ip: Option<IpAddr>,
+    pub port: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RelayCfg {
+    pub ip: Option<IpAddr>,
+    pub min_port: u16,
+    pub max_port: u16,
+}
+
 fn parse_ip(val: &str) -> Result<(Option<IpAddr>, &str), &'static str> {
     let val = val.trim();
     match val.as_bytes().first() {
@@ -25,17 +38,18 @@ fn parse_ip(val: &str) -> Result<(Option<IpAddr>, &str), &'static str> {
     }
 }
 
-pub fn parse_listen(val: &str) -> Result<(Option<IpAddr>, u16), &'static str> {
+pub fn parse_listen(val: &str) -> Result<ListenCfg, &'static str> {
     let (ip, port) = parse_ip(val)?;
-    Ok((ip, port.parse().map_err(|_| "cannot parse port")?))
+    let port = port.parse().map_err(|_| "cannot parse port")?;
+    Ok(ListenCfg { ip, port })
 }
 
-pub fn parse_range(val: &str) -> Result<(Option<IpAddr>, u16, u16), &'static str> {
+pub fn parse_range(val: &str) -> Result<RelayCfg, &'static str> {
     let (ip, range) = parse_ip(val)?;
     let (min, max) = range.split_once('-').ok_or("cannot parse as range")?;
-    Ok((
+    Ok(RelayCfg {
         ip,
-        min.parse().map_err(|_| "cannot parse min port")?,
-        max.parse().map_err(|_| "cannot parse max port")?,
-    ))
+        min_port: min.parse().map_err(|_| "cannot parse min port")?,
+        max_port: max.parse().map_err(|_| "cannot parse max port")?,
+    })
 }
