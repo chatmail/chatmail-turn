@@ -5,16 +5,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
+use clap::builder::ValueParser;
 use clap::{App, AppSettings, Arg};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{UdpSocket, UnixListener};
 use turn::Error;
 use turn::auth::generate_long_term_credentials;
 use turn::auth::*;
-use turn::relay::relay_static::RelayAddressGeneratorStatic;
+use turn::relay::relay_range::RelayAddressGeneratorRanges;
 use turn::server::Server;
 use turn::server::config::{ConnConfig, ServerConfig};
 use webrtc_util::vnet::net::Net;
+
+mod cli;
 
 fn listen_ips() -> BTreeSet<IpAddr> {
     let mut ip_set = BTreeSet::new();
@@ -39,6 +42,31 @@ fn is_link_local(ip: IpAddr) -> bool {
         IpAddr::V4(ipv4) => ipv4.is_link_local(),
         IpAddr::V6(ipv6) => ipv6.is_unicast_link_local(),
     }
+}
+
+async fn create_conn_config(
+    listen_ip: IpAddr,
+    conn: Option<Arc<UdpSocket>>,
+    listen: &cli::ListenCfg,
+    relay: &cli::RelayCfg,
+) -> Result<ConnConfig, Error> {
+    println!("Listening on public IP: {listen_ip}");
+    let conn = match conn {
+        Some(conn) => conn, // listener socket with user-specified host already created
+        None => Arc::new(UdpSocket::bind((listen_ip, listen.port)).await?),
+    };
+    let relay_ip = relay.ip.unwrap_or(listen_ip);
+    Ok(ConnConfig {
+        conn,
+        relay_addr_generator: Box::new(RelayAddressGeneratorRanges {
+            relay_address: relay_ip,
+            address: relay_ip.to_string(),
+            min_port: relay.min_port,
+            max_port: relay.max_port,
+            max_retries: 0, // use the default
+            net: Arc::new(Net::new(None)),
+        }),
+    })
 }
 
 /// Listens on the Unix socket,
@@ -75,23 +103,39 @@ async fn main() -> Result<(), Error> {
         .setting(AppSettings::DeriveDisplayOrder)
         .setting(AppSettings::SubcommandsNegateReqs)
         .arg(
-            Arg::with_name("FULLHELP")
+            Arg::new("FULLHELP")
                 .help("Prints more detailed help information")
                 .long("fullhelp"),
         )
         .arg(
-            Arg::with_name("realm")
+            Arg::new("realm")
                 .default_value("webrtc.rs")
                 .takes_value(true)
                 .long("realm")
                 .help("Realm (defaults to \"webrtc.rs\")"),
         )
         .arg(
-            Arg::with_name("socket")
+            Arg::new("socket")
                 .required(true)
                 .takes_value(true)
                 .long("socket")
                 .help("Unix socket path"),
+        )
+        .arg(
+            Arg::new("listen")
+                .default_value(":3478")
+                .takes_value(true)
+                .value_parser(ValueParser::new(cli::parse_listen))
+                .long("listen")
+                .help("Address to bind TURN listener to: [ip]:<port>"),
+        )
+        .arg(
+            Arg::new("relayaddr")
+                .default_value(":49152-65535")
+                .takes_value(true)
+                .value_parser(ValueParser::new(cli::parse_range))
+                .long("relay-addr")
+                .help("Host and port range available for TURN relay: [ip]:<min>-<max>"),
         );
 
     let matches = app.clone().get_matches();
@@ -101,24 +145,27 @@ async fn main() -> Result<(), Error> {
         std::process::exit(0);
     }
 
-    let port = 3478;
     let realm = matches.value_of("realm").unwrap();
     let socket_path = Path::new(matches.value_of("socket").unwrap());
+    let listen: cli::ListenCfg = *matches.get_one("listen").unwrap();
+    let relay: cli::RelayCfg = *matches.get_one("relayaddr").unwrap();
 
-    let mut conn_configs = Vec::new();
-    for listen_ip in listen_ips() {
-        println!("Listening on {listen_ip}");
-        let conn = Arc::new(UdpSocket::bind((listen_ip, port)).await?);
-        let conn_config = ConnConfig {
-            conn,
-            relay_addr_generator: Box::new(RelayAddressGeneratorStatic {
-                relay_address: listen_ip,
-                address: listen_ip.to_string(),
-                net: Arc::new(Net::new(None)),
-            }),
-        };
-        conn_configs.push(conn_config);
-    }
+    let conn = match listen.ip {
+        Some(ip) => Some(Arc::new(UdpSocket::bind((ip, listen.port)).await?)),
+        _ => None,
+    };
+
+    let conn_configs = if conn.is_some() && relay.ip.is_some() {
+        // do not iterate over available IPs
+        // when both hosts are explicitly specified
+        vec![create_conn_config(listen.ip.unwrap(), conn, &listen, &relay).await?]
+    } else {
+        let mut conn_configs = Vec::new();
+        for listen_ip in listen_ips() {
+            conn_configs.push(create_conn_config(listen_ip, conn.clone(), &listen, &relay).await?);
+        }
+        conn_configs
+    };
 
     let shared_secret = "north";
     let auth_handler = LongTermAuthHandler::new(shared_secret.to_string());
