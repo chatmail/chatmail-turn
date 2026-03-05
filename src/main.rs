@@ -19,13 +19,29 @@ use webrtc_util::vnet::net::Net;
 
 mod cli;
 
-fn public_ips() -> BTreeSet<IpAddr> {
+fn listen_ips() -> BTreeSet<IpAddr> {
     let mut ip_set = BTreeSet::new();
     let interfaces = netdev::interface::get_interfaces();
     for interface in interfaces {
-        ip_set.extend(interface.global_ip_addrs());
+        for ip in interface.ip_addrs() {
+            if !ip.is_loopback() && !is_link_local(ip) {
+                ip_set.insert(ip);
+            }
+        }
     }
     ip_set
+}
+
+/// Link-local addresses (fe80::/10 in IPv6, 169.254.0.0/16 in IPv4) are non-routable
+/// and should be excluded from TURN listening addresses because:
+/// 1. They are only reachable within the same network segment.
+/// 2. Binding to an IPv6 link-local address requires a Scope ID (interface index),
+///    otherwise the OS returns EINVAL (Invalid Argument).
+fn is_link_local(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ipv4) => ipv4.is_link_local(),
+        IpAddr::V6(ipv6) => ipv6.is_unicast_link_local(),
+    }
 }
 
 async fn create_conn_config(
@@ -145,8 +161,8 @@ async fn main() -> Result<(), Error> {
         vec![create_conn_config(listen.ip.unwrap(), conn, &listen, &relay).await?]
     } else {
         let mut conn_configs = Vec::new();
-        for public_ip in public_ips() {
-            conn_configs.push(create_conn_config(public_ip, conn.clone(), &listen, &relay).await?);
+        for listen_ip in listen_ips() {
+            conn_configs.push(create_conn_config(listen_ip, conn.clone(), &listen, &relay).await?);
         }
         conn_configs
     };
