@@ -45,17 +45,17 @@ fn is_link_local(ip: IpAddr) -> bool {
 }
 
 async fn create_conn_config(
-    public_ip: IpAddr,
+    listen_ip: IpAddr,
     conn: Option<Arc<UdpSocket>>,
     listen: &cli::ListenCfg,
     relay: &cli::RelayCfg,
 ) -> Result<ConnConfig, Error> {
-    println!("Listening on public IP: {public_ip}");
+    println!("Listening on public IP: {listen_ip}");
     let conn = match conn {
         Some(conn) => conn, // listener socket with user-specified host already created
-        None => Arc::new(UdpSocket::bind((public_ip, listen.port)).await?),
+        None => Arc::new(UdpSocket::bind((listen_ip, listen.port)).await?),
     };
-    let relay_ip = relay.ip.unwrap_or(public_ip);
+    let relay_ip = relay.ip.unwrap_or(listen_ip);
     Ok(ConnConfig {
         conn,
         relay_addr_generator: Box::new(RelayAddressGeneratorRanges {
