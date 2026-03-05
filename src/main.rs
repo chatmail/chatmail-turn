@@ -16,13 +16,29 @@ use turn::server::Server;
 use turn::server::config::{ConnConfig, ServerConfig};
 use webrtc_util::vnet::net::Net;
 
-fn public_ips() -> BTreeSet<IpAddr> {
+fn listen_ips() -> BTreeSet<IpAddr> {
     let mut ip_set = BTreeSet::new();
     let interfaces = netdev::interface::get_interfaces();
     for interface in interfaces {
-        ip_set.extend(interface.global_ip_addrs());
+        for ip in interface.ip_addrs() {
+            if !ip.is_loopback() && !is_link_local(ip) {
+                ip_set.insert(ip);
+            }
+        }
     }
     ip_set
+}
+
+/// Link-local addresses (fe80::/10 in IPv6, 169.254.0.0/16 in IPv4) are non-routable
+/// and should be excluded from TURN listening addresses because:
+/// 1. They are only reachable within the same network segment.
+/// 2. Binding to an IPv6 link-local address requires a Scope ID (interface index),
+///    otherwise the OS returns EINVAL (Invalid Argument).
+fn is_link_local(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ipv4) => ipv4.is_link_local(),
+        IpAddr::V6(ipv6) => ipv6.is_unicast_link_local(),
+    }
 }
 
 /// Listens on the Unix socket,
@@ -38,7 +54,7 @@ async fn socket_loop(path: &Path, shared_secret: &str) -> Result<()> {
                 // Write credentials to stdout.
                 // Newline indicates the end of the answer
                 // and allows the client to tell if the answer
-                // was truncated if the server is restarted 
+                // was truncated if the server is restarted
                 // or crashed while writing the answer.
                 let res = format!("{username}:{password}\n");
                 stream.write_all(res.as_bytes()).await?;
@@ -90,14 +106,14 @@ async fn main() -> Result<(), Error> {
     let socket_path = Path::new(matches.value_of("socket").unwrap());
 
     let mut conn_configs = Vec::new();
-    for public_ip in public_ips() {
-        println!("Listening on public IP: {public_ip}");
-        let conn = Arc::new(UdpSocket::bind((public_ip, port)).await?);
+    for listen_ip in listen_ips() {
+        println!("Listening on {listen_ip}");
+        let conn = Arc::new(UdpSocket::bind((listen_ip, port)).await?);
         let conn_config = ConnConfig {
             conn,
             relay_addr_generator: Box::new(RelayAddressGeneratorStatic {
-                relay_address: public_ip,
-                address: public_ip.to_string(),
+                relay_address: listen_ip,
+                address: listen_ip.to_string(),
                 net: Arc::new(Net::new(None)),
             }),
         };
